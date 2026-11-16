@@ -1,29 +1,37 @@
 package ui
 
 import (
+	"path/filepath"
+	"time"
+
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/wierdling/gofiledialog"
 
 	"tierlist-app/models"
 	appstorage "tierlist-app/storage"
 )
 
 type TierListScreen struct {
-	window        fyne.Window
-	categories    *[]models.Category
-	catIdx        int
-	tlIdx         int
-	tierList      models.TierList
-	tierRows      []*TierRow
-	topBar        *fyne.Container
-	poolBox       *fyne.Container
-	poolContainer *fyne.Container
-	editMode      bool
-	editBtn       *widget.Button
-	content       fyne.CanvasObject
+	window      fyne.Window
+	categories  *[]models.Category
+	catIdx      int
+	tlIdx       int
+	tierList    models.TierList
+	tierRows    []*TierRow
+	topBar      *fyne.Container
+	poolBox     *fyne.Container
+	poolPanel   fyne.CanvasObject
+	poolWrapper *fyne.Container
+	poolVisible bool
+	editMode    bool
+	editBtn     *widget.Button
+	content     fyne.CanvasObject
 }
 
 func NewTierListScreen(win fyne.Window, categories *[]models.Category, catIdx, tlIdx int, tl models.TierList) fyne.CanvasObject {
@@ -36,6 +44,7 @@ func NewTierListScreen(win fyne.Window, categories *[]models.Category, catIdx, t
 }
 
 func (ts *TierListScreen) buildUI() {
+	// --- Верхняя панель ---
 	backBtn := widget.NewButton("← Назад", func() {
 		ts.window.SetContent(
 			NewCategoryScreen(ts.window, ts.categories, ts.catIdx, (*ts.categories)[ts.catIdx]),
@@ -45,11 +54,10 @@ func (ts *TierListScreen) buildUI() {
 		ts.save()
 		dialog.ShowInformation("Сохранено", "Тир-лист сохранён", ts.window)
 	})
-	ts.editBtn = widget.NewButton("Изменить", func() {
-		ts.toggleEditMode()
-	})
+	ts.editBtn = widget.NewButton("Изменить", func() { ts.toggleEditMode() })
 	ts.topBar = container.NewHBox(backBtn, saveBtn, ts.editBtn)
 
+	// --- Тиры (вертикально) ---
 	tiersVBox := container.NewVBox()
 	ts.tierRows = nil
 	for i := range ts.tierList.Tiers {
@@ -59,28 +67,100 @@ func (ts *TierListScreen) buildUI() {
 		tiersVBox.Add(row)
 	}
 
-	// Пул
-	ts.poolBox = container.NewHBox()
+	mainContent := container.NewBorder(
+		ts.topBar, nil, nil, nil,
+		container.NewVScroll(tiersVBox),
+	)
+
+	// --- FAB (круглая кнопка) в нижнем правом углу ---
+	fab := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
+		ts.togglePool()
+	})
+	fab.Importance = widget.HighImportance
+	fabBox := container.NewGridWrap(fyne.NewSize(56, 56), fab)
+	fabRow := container.NewHBox(layout.NewSpacer(), fabBox)
+	fabOverlay := container.NewBorder(
+		nil, container.NewPadded(fabRow), nil, nil, nil,
+	)
+
+	// --- Боковая панель (скрытая) ---
+	ts.poolBox = container.NewGridWrap(fyne.NewSize(100, 100))
 	ts.rebuildPool()
 
 	addImgBtn := widget.NewButton("+ Картинка", func() { ts.addImageToPool() })
 	addImgBtn.Importance = widget.HighImportance
-	poolHeader := widget.NewLabelWithStyle(
-		"Не размещено:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true},
-	)
 
-	poolScroll := container.NewHScroll(ts.poolBox)
-	poolScroll.SetMinSize(fyne.NewSize(800, 120))
+	closeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
+		ts.togglePool()
+	})
+	closeBtn.Importance = widget.LowImportance
 
-	ts.poolContainer = container.NewBorder(
-		container.NewVBox(poolHeader, addImgBtn),
-		nil, nil, nil, poolScroll,
-	)
+	header := container.NewBorder(nil, nil, nil, closeBtn, addImgBtn)
+	poolScroll := container.NewVScroll(ts.poolBox)
+	inner := container.NewBorder(container.NewPadded(header), nil, nil, nil, poolScroll)
+	innerPadded := container.NewPadded(inner)
 
-	ts.content = container.NewBorder(
-		ts.topBar, ts.poolContainer, nil, nil,
-		container.NewVScroll(tiersVBox),
-	)
+	bg := canvas.NewRectangle(theme.Color(theme.ColorNameMenuBackground))
+	bg.StrokeColor = theme.Color(theme.ColorNameSeparator)
+	bg.StrokeWidth = 1
+
+	ts.poolPanel = container.NewStack(bg, innerPadded)
+
+	ts.poolWrapper = container.NewWithoutLayout(ts.poolPanel)
+
+	canvasSize := ts.window.Canvas().Size()
+	if canvasSize.Width == 0 || canvasSize.Height == 0 {
+		canvasSize = fyne.NewSize(900, 600)
+	}
+	ts.poolWrapper.Resize(canvasSize)
+	panelW := ts.panelWidth(canvasSize)
+	ts.poolPanel.Resize(fyne.NewSize(panelW, canvasSize.Height))
+	ts.poolPanel.Move(fyne.NewPos(canvasSize.Width, 0))
+
+	ts.content = container.NewStack(mainContent, fabOverlay, ts.poolWrapper)
+}
+
+func (ts *TierListScreen) panelWidth(size fyne.Size) float32 {
+	w := size.Width / 4
+	if w < 240 {
+		w = 240
+	}
+	if w > 400 {
+		w = 400
+	}
+	return w
+}
+
+func (ts *TierListScreen) togglePool() {
+	canvasSize := ts.window.Canvas().Size()
+	if canvasSize.Width == 0 || canvasSize.Height == 0 {
+		canvasSize = fyne.NewSize(900, 600)
+	}
+
+	panelW := ts.panelWidth(canvasSize)
+	ts.poolWrapper.Resize(canvasSize)
+	ts.poolPanel.Resize(fyne.NewSize(panelW, canvasSize.Height))
+
+	var startX, endX float32
+	if ts.poolVisible {
+		startX = canvasSize.Width - panelW
+		endX = canvasSize.Width
+	} else {
+		startX = canvasSize.Width
+		endX = canvasSize.Width - panelW
+	}
+
+	ts.poolPanel.Move(fyne.NewPos(startX, 0))
+	ts.poolPanel.Refresh()
+
+	anim := fyne.NewAnimation(280*time.Millisecond, func(d float32) {
+		x := startX + (endX-startX)*d
+		ts.poolPanel.Move(fyne.NewPos(x, 0))
+		ts.poolPanel.Refresh()
+	})
+	anim.Start()
+
+	ts.poolVisible = !ts.poolVisible
 }
 
 func (ts *TierListScreen) toggleEditMode() {
@@ -157,40 +237,39 @@ func (ts *TierListScreen) renameInPool(id string) {
 }
 
 func (ts *TierListScreen) addImageToPool() {
-	dlg := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-		if err != nil || reader == nil {
+	err := gofiledialog.ShowOpen(func(paths []string, err error) {
+		if err != nil {
+			dialog.ShowError(err, ts.window)
 			return
 		}
-		path := reader.URI().Path()
-		reader.Close()
+		if len(paths) == 0 {
+			return
+		}
 
-		entry := widget.NewEntry()
-		entry.SetPlaceHolder("Подпись (появится под картинкой)")
-		entryBox := container.NewGridWrap(fyne.NewSize(360, 40), entry)
+		for _, path := range paths {
+			label := filepath.Base(path)
 
-		dialog.ShowForm("Подпись картинки", "Добавить", "Отмена",
-			[]*widget.FormItem{widget.NewFormItem("Подпись", entryBox)},
-			func(ok bool) {
-				if !ok {
-					return
-				}
-				label := entry.Text
-				if label == "" {
-					label = path
-				}
-				item := models.TierItem{
-					ID:        NewItemID(),
-					Label:     label,
-					ImagePath: path,
-				}
-				ts.tierList.Pool = append(ts.tierList.Pool, item)
-				ts.rebuildPool()
-				ts.save()
-			}, ts.window,
-		)
-	}, ts.window)
-	dlg.SetFilter(storage.NewExtensionFileFilter([]string{".png", ".jpg", ".jpeg"}))
-	dlg.Show()
+			item := models.TierItem{
+				ID:        NewItemID(),
+				Label:     label,
+				ImagePath: path,
+			}
+			ts.tierList.Pool = append(ts.tierList.Pool, item)
+		}
+
+		ts.rebuildPool()
+		ts.save()
+	}, ts.window,
+		gofiledialog.WithTitle("Выберите картинки"),
+		gofiledialog.WithFilters(
+			gofiledialog.Filter{Name: "Изображения", Extensions: []string{".png", ".jpg", ".jpeg"}},
+			gofiledialog.Filter{Name: "Все файлы"},
+		),
+		gofiledialog.WithMultiSelect(true), // 👈 Включаем множественный выбор
+	)
+	if err != nil {
+		dialog.ShowError(err, ts.window)
+	}
 }
 
 func (ts *TierListScreen) save() {
@@ -200,17 +279,24 @@ func (ts *TierListScreen) save() {
 	}
 }
 
+// findDropTarget — куда упал элемент: в панель (пул) или в один из тиров.
 func (ts *TierListScreen) findDropTarget(absPos fyne.Position) (*TierRow, bool) {
+	// Сначала проверяем панель (она сверху).
+	if ts.poolVisible {
+		p := ts.poolPanel.Position()
+		s := ts.poolPanel.Size()
+		if absPos.X >= p.X && absPos.X <= p.X+s.Width &&
+			absPos.Y >= p.Y && absPos.Y <= p.Y+s.Height {
+			return nil, true
+		}
+	}
+	// Затем тиры.
 	topBarH := ts.topBar.Size().Height
 	for _, row := range ts.tierRows {
 		rowY := topBarH + row.Position().Y
 		if absPos.Y >= rowY && absPos.Y < rowY+row.Size().Height {
 			return row, false
 		}
-	}
-	poolY := ts.poolContainer.Position().Y
-	if absPos.Y >= poolY {
-		return nil, true
 	}
 	return nil, false
 }
