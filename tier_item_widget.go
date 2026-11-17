@@ -73,7 +73,6 @@ func (w *TierItemWidget) MinSize() fyne.Size {
 func (w *TierItemWidget) CreateRenderer() fyne.WidgetRenderer {
 	var content fyne.CanvasObject = w.image
 
-	// 👇 Полоску и текст создаем ТОЛЬКО если подпись не пустая
 	if w.item.Label != "" {
 		strip := canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 170})
 

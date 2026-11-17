@@ -1,4 +1,3 @@
-// ui/draggable_item.go
 package ui
 
 import (
@@ -55,7 +54,6 @@ func (d *DraggableItem) Dragged(ev *fyne.DragEvent) {
 }
 
 func (d *DraggableItem) DragEnd() {
-	// Прячем и удаляем "призрак".
 	if d.ghost != nil {
 		d.ghost.Hide()
 		d.ghost = nil

@@ -142,7 +142,6 @@ func (ts *TierListScreen) buildUI() {
 	ts.poolPanel.Resize(fyne.NewSize(panelW, canvasSize.Height))
 	ts.poolPanel.Move(fyne.NewPos(canvasSize.Width, 0))
 
-	// Итоговый стек: main + fab + panel (панель сверху).
 	ts.content = container.NewStack(mainContent, fabOverlay, ts.poolWrapper)
 }
 
@@ -430,7 +429,7 @@ func (ts *TierListScreen) setupDropHandler() {
 		var imageURIs []fyne.URI
 		for _, u := range uris {
 			ext := strings.ToLower(filepath.Ext(u.Path()))
-			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" { // 👈 добавили .webp
+			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" {
 				imageURIs = append(imageURIs, u)
 			}
 		}
@@ -470,8 +469,6 @@ func (ts *TierListScreen) setupDropHandler() {
 
 func (ts *TierListScreen) setupCloseHandler() {
 	ts.window.SetCloseIntercept(func() {
-		// Принудительно завершаем приложение.
-		// Это закроет все окна, включая диалог выбора файла.
 		fyne.CurrentApp().Quit()
 	})
 }

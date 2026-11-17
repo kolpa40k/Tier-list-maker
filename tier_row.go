@@ -105,7 +105,6 @@ func (tr *TierRow) renameItem(id string) {
 	)
 }
 
-// editName — диалог переименования тира с валидацией длины (≤30) и счётчиком.
 func (tr *TierRow) editName() {
 	entry := widget.NewEntry()
 	entry.SetText(tr.tier.Name)
