@@ -1,5 +1,40 @@
 package models
 
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+var (
+	idCounter uint64
+	idMu      sync.Mutex
+)
+
+func NewItemID() string {
+	idMu.Lock()
+	idCounter++
+	n := idCounter
+	idMu.Unlock()
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), n)
+}
+
+func (tl *TierList) RepairIDs() {
+	seen := make(map[string]bool)
+	repair := func(items []TierItem) {
+		for i := range items {
+			if items[i].ID == "" || seen[items[i].ID] {
+				items[i].ID = NewItemID()
+			}
+			seen[items[i].ID] = true
+		}
+	}
+	for t := range tl.Tiers {
+		repair(tl.Tiers[t].Items)
+	}
+	repair(tl.Pool)
+}
+
 type TierItem struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`

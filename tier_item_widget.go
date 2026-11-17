@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"golang.org/x/image/draw"
 
 	"tierlist-app/models"
 )
@@ -51,8 +53,10 @@ func NewTierItemWidget(item models.TierItem, editMode bool, onDelete, onRename f
 		onRename: onRename,
 	}
 
-	res := loadImageResource(item.ImagePath)
-	img := canvas.NewImageFromResource(res)
+	img := createThumbnail(item.ImagePath, 200, 200)
+	if img == nil {
+		img = canvas.NewImageFromResource(theme.BrokenImageIcon())
+	}
 	img.FillMode = canvas.ImageFillContain
 	img.SetMinSize(fyne.NewSize(100, 100))
 	w.image = img
@@ -67,22 +71,27 @@ func (w *TierItemWidget) MinSize() fyne.Size {
 }
 
 func (w *TierItemWidget) CreateRenderer() fyne.WidgetRenderer {
-	strip := canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 170})
+	var content fyne.CanvasObject = w.image
 
-	display := w.item.Label
-	r := []rune(display)
-	if len(r) > 14 {
-		display = string(r[:14]) + "…"
+	// 👇 Полоску и текст создаем ТОЛЬКО если подпись не пустая
+	if w.item.Label != "" {
+		strip := canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 170})
+
+		display := w.item.Label
+		r := []rune(display)
+		if len(r) > 14 {
+			display = string(r[:14]) + "…"
+		}
+		labelText := canvas.NewText(display, color.White)
+		labelText.TextSize = 12
+		labelText.TextStyle = fyne.TextStyle{Bold: true}
+
+		labelStack := container.NewStack(strip, container.NewCenter(labelText))
+		labelBar := container.NewGridWrap(fyne.NewSize(100, 22), labelStack)
+		bottomOverlay := container.NewBorder(nil, labelBar, nil, nil, nil)
+
+		content = container.NewStack(w.image, bottomOverlay)
 	}
-	labelText := canvas.NewText(display, color.White)
-	labelText.TextSize = 12
-	labelText.TextStyle = fyne.TextStyle{Bold: true}
-
-	labelStack := container.NewStack(strip, container.NewCenter(labelText))
-	labelBar := container.NewGridWrap(fyne.NewSize(100, 22), labelStack)
-	bottomOverlay := container.NewBorder(nil, labelBar, nil, nil, nil)
-
-	content := container.NewStack(w.image, bottomOverlay)
 
 	if w.editMode {
 		renameBtn := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
@@ -110,4 +119,25 @@ func (w *TierItemWidget) CreateRenderer() fyne.WidgetRenderer {
 	}
 
 	return widget.NewSimpleRenderer(content)
+}
+
+func createThumbnail(path string, width, height int) *canvas.Image {
+	file, err := os.Open(path)
+	if err != nil {
+		fyne.LogError("Failed to open image file", err)
+		return nil
+	}
+	defer file.Close()
+
+	src, _, err := image.Decode(file)
+	if err != nil {
+		fyne.LogError("Failed to decode image", err)
+		return nil
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	draw.ApproxBiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+
+	return canvas.NewImageFromImage(dst)
 }

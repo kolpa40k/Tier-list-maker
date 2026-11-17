@@ -2,9 +2,6 @@
 package ui
 
 import (
-	"fmt"
-	"time"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/widget"
@@ -13,7 +10,7 @@ import (
 )
 
 func NewItemID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return models.NewItemID()
 }
 
 type DraggableItem struct {

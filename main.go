@@ -14,6 +14,13 @@ import (
 
 func main() {
 	myApp := app.New()
+
+	app.SetMetadata(fyne.AppMetadata{
+		Name:    "Tierlist",
+		Version: "1.1.0",
+		ID:      "com.kolpa40k.tierlist",
+	})
+
 	settings, err := storage.LoadSettings()
 	if err != nil {
 		log.Printf("не удалось загрузить настройки: %v", err)
@@ -29,6 +36,19 @@ func main() {
 	categories, loadErr := storage.LoadCategories()
 	if loadErr != nil {
 		log.Printf("не удалось загрузить категории: %v", loadErr)
+	}
+
+	if loadErr == nil && len(categories) > 0 {
+		changed, migErr := storage.MigrateAllImages(categories)
+		if migErr != nil {
+			log.Printf("ошибка миграции картинок: %v", migErr)
+		} else if changed {
+			if err := storage.SaveCategories(categories); err != nil {
+				log.Printf("не удалось сохранить после миграции: %v", err)
+			} else {
+				log.Printf("миграция картинок выполнена, пути обновлены")
+			}
+		}
 	}
 
 	myWindow.SetContent(ui.NewHomeScreen(myWindow, categories))

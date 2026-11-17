@@ -1,7 +1,11 @@
 package ui
 
 import (
+	"fmt"
+	"log"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -18,20 +22,21 @@ import (
 )
 
 type TierListScreen struct {
-	window      fyne.Window
-	categories  *[]models.Category
-	catIdx      int
-	tlIdx       int
-	tierList    models.TierList
-	tierRows    []*TierRow
-	topBar      *fyne.Container
-	poolBox     *fyne.Container
-	poolPanel   fyne.CanvasObject
-	poolWrapper *fyne.Container
-	poolVisible bool
-	editMode    bool
-	editBtn     *widget.Button
-	content     fyne.CanvasObject
+	window       fyne.Window
+	categories   *[]models.Category
+	catIdx       int
+	tlIdx        int
+	tierList     models.TierList
+	tierRows     []*TierRow
+	topBar       *fyne.Container
+	poolBox      *fyne.Container
+	poolPanel    fyne.CanvasObject
+	poolWrapper  *fyne.Container
+	poolVisible  bool
+	editMode     bool
+	editBtn      *widget.Button
+	deleteAllBtn *widget.Button
+	content      fyne.CanvasObject
 }
 
 func NewTierListScreen(win fyne.Window, categories *[]models.Category, catIdx, tlIdx int, tl models.TierList) fyne.CanvasObject {
@@ -39,13 +44,17 @@ func NewTierListScreen(win fyne.Window, categories *[]models.Category, catIdx, t
 		window: win, categories: categories,
 		catIdx: catIdx, tlIdx: tlIdx, tierList: tl,
 	}
+	ts.tierList.RepairIDs()
 	ts.buildUI()
+	ts.setupDropHandler()
+	ts.setupCloseHandler()
 	return ts.content
 }
 
 func (ts *TierListScreen) buildUI() {
 	// --- Верхняя панель ---
 	backBtn := widget.NewButton("← Назад", func() {
+		ts.window.SetOnDropped(nil)
 		ts.window.SetContent(
 			NewCategoryScreen(ts.window, ts.categories, ts.catIdx, (*ts.categories)[ts.catIdx]),
 		)
@@ -57,6 +66,14 @@ func (ts *TierListScreen) buildUI() {
 	ts.editBtn = widget.NewButton("Изменить", func() { ts.toggleEditMode() })
 	ts.topBar = container.NewHBox(backBtn, saveBtn, ts.editBtn)
 
+	titleText := canvas.NewText(ts.tierList.Name, theme.Color(theme.ColorNameForeground))
+	titleText.TextSize = 28 // РАЗМЕР ШРИФТА ТУТ!!!
+	titleText.TextStyle = fyne.TextStyle{Bold: true}
+	titleText.Alignment = fyne.TextAlignCenter
+	titleContainer := container.NewPadded(titleText)
+
+	topSection := container.NewVBox(ts.topBar, titleContainer)
+
 	// --- Тиры (вертикально) ---
 	tiersVBox := container.NewVBox()
 	ts.tierRows = nil
@@ -67,11 +84,11 @@ func (ts *TierListScreen) buildUI() {
 		tiersVBox.Add(row)
 	}
 
+	// --- Основной контент ---
 	mainContent := container.NewBorder(
-		ts.topBar, nil, nil, nil,
+		topSection, nil, nil, nil,
 		container.NewVScroll(tiersVBox),
 	)
-
 	// --- FAB (круглая кнопка) в нижнем правом углу ---
 	fab := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() {
 		ts.togglePool()
@@ -90,12 +107,20 @@ func (ts *TierListScreen) buildUI() {
 	addImgBtn := widget.NewButton("+ Картинка", func() { ts.addImageToPool() })
 	addImgBtn.Importance = widget.HighImportance
 
+	ts.deleteAllBtn = widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+		ts.deleteAllPoolItems()
+	})
+	ts.deleteAllBtn.Importance = widget.DangerImportance
+	ts.updateDeleteAllVisibility()
+
 	closeBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 		ts.togglePool()
 	})
 	closeBtn.Importance = widget.LowImportance
 
-	header := container.NewBorder(nil, nil, nil, closeBtn, addImgBtn)
+	rightButtons := container.NewHBox(ts.deleteAllBtn, closeBtn)
+	header := container.NewBorder(nil, nil, nil, rightButtons, addImgBtn)
+
 	poolScroll := container.NewVScroll(ts.poolBox)
 	inner := container.NewBorder(container.NewPadded(header), nil, nil, nil, poolScroll)
 	innerPadded := container.NewPadded(inner)
@@ -117,6 +142,7 @@ func (ts *TierListScreen) buildUI() {
 	ts.poolPanel.Resize(fyne.NewSize(panelW, canvasSize.Height))
 	ts.poolPanel.Move(fyne.NewPos(canvasSize.Width, 0))
 
+	// Итоговый стек: main + fab + panel (панель сверху).
 	ts.content = container.NewStack(mainContent, fabOverlay, ts.poolWrapper)
 }
 
@@ -178,27 +204,37 @@ func (ts *TierListScreen) toggleEditMode() {
 
 func (ts *TierListScreen) rebuildPool() {
 	ts.poolBox.Objects = nil
-	for i := range ts.tierList.Pool {
-		item := ts.tierList.Pool[i]
-		itemWidget := NewTierItemWidget(
-			item,
-			ts.editMode,
-			func() { ts.deleteFromPool(item.ID) },
-			func() { ts.renameInPool(item.ID) },
-		)
-		if ts.editMode {
-			ts.poolBox.Add(itemWidget)
-		} else {
-			draggable := NewDraggableItem(itemWidget, item, nil, ts)
-			ts.poolBox.Add(draggable)
+
+	if len(ts.tierList.Pool) == 0 {
+		ts.poolBox.Layout = layout.NewVBoxLayout()
+		ts.poolBox.Add(NewDropZone())
+	} else {
+		ts.poolBox.Layout = layout.NewGridWrapLayout(fyne.NewSize(100, 100))
+		for i := range ts.tierList.Pool {
+			item := ts.tierList.Pool[i]
+			itemWidget := NewTierItemWidget(
+				item,
+				ts.editMode,
+				func() { ts.deleteFromPool(item.ID) },
+				func() { ts.renameInPool(item.ID) },
+			)
+			if ts.editMode {
+				ts.poolBox.Add(itemWidget)
+			} else {
+				draggable := NewDraggableItem(itemWidget, item, nil, ts)
+				ts.poolBox.Add(draggable)
+			}
 		}
 	}
+
 	ts.poolBox.Refresh()
+	ts.updateDeleteAllVisibility()
 }
 
 func (ts *TierListScreen) deleteFromPool(id string) {
 	for i, it := range ts.tierList.Pool {
 		if it.ID == id {
+			appstorage.DeleteImage(it.ImagePath)
 			ts.tierList.Pool = append(ts.tierList.Pool[:i], ts.tierList.Pool[i+1:]...)
 			break
 		}
@@ -226,7 +262,7 @@ func (ts *TierListScreen) renameInPool(id string) {
 	dialog.ShowForm("Переименовать подпись", "Сохранить", "Отмена",
 		[]*widget.FormItem{widget.NewFormItem("Подпись", entryBox)},
 		func(ok bool) {
-			if !ok || entry.Text == "" {
+			if !ok {
 				return
 			}
 			current.Label = entry.Text
@@ -247,12 +283,22 @@ func (ts *TierListScreen) addImageToPool() {
 		}
 
 		for _, path := range paths {
-			label := filepath.Base(path)
+			id := NewItemID()
 
+			storedPath, err := appstorage.ImportImage(path, id)
+			if err != nil {
+				dialog.ShowError(
+					fmt.Errorf("не удалось импортировать %s: %w", filepath.Base(path), err),
+					ts.window,
+				)
+				continue
+			}
+
+			label := filepath.Base(path)
 			item := models.TierItem{
-				ID:        NewItemID(),
+				ID:        id,
 				Label:     label,
-				ImagePath: path,
+				ImagePath: storedPath,
 			}
 			ts.tierList.Pool = append(ts.tierList.Pool, item)
 		}
@@ -262,10 +308,10 @@ func (ts *TierListScreen) addImageToPool() {
 	}, ts.window,
 		gofiledialog.WithTitle("Выберите картинки"),
 		gofiledialog.WithFilters(
-			gofiledialog.Filter{Name: "Изображения", Extensions: []string{".png", ".jpg", ".jpeg"}},
+			gofiledialog.Filter{Name: "Изображения", Extensions: []string{".png", ".jpg", ".jpeg", ".webp"}},
 			gofiledialog.Filter{Name: "Все файлы"},
 		),
-		gofiledialog.WithMultiSelect(true), // 👈 Включаем множественный выбор
+		gofiledialog.WithMultiSelect(true),
 	)
 	if err != nil {
 		dialog.ShowError(err, ts.window)
@@ -279,9 +325,7 @@ func (ts *TierListScreen) save() {
 	}
 }
 
-// findDropTarget — куда упал элемент: в панель (пул) или в один из тиров.
 func (ts *TierListScreen) findDropTarget(absPos fyne.Position) (*TierRow, bool) {
-	// Сначала проверяем панель (она сверху).
 	if ts.poolVisible {
 		p := ts.poolPanel.Position()
 		s := ts.poolPanel.Size()
@@ -290,7 +334,6 @@ func (ts *TierListScreen) findDropTarget(absPos fyne.Position) (*TierRow, bool) 
 			return nil, true
 		}
 	}
-	// Затем тиры.
 	topBarH := ts.topBar.Size().Height
 	for _, row := range ts.tierRows {
 		rowY := topBarH + row.Position().Y
@@ -339,4 +382,96 @@ func (ts *TierListScreen) handleDrop(d *DraggableItem, pos fyne.Position) {
 	}
 	ts.rebuildPool()
 	ts.save()
+}
+
+func (ts *TierListScreen) updateDeleteAllVisibility() {
+	if ts.deleteAllBtn == nil {
+		return
+	}
+	if len(ts.tierList.Pool) == 0 {
+		ts.deleteAllBtn.Hide()
+	} else {
+		ts.deleteAllBtn.Show()
+	}
+}
+
+func (ts *TierListScreen) deleteAllPoolItems() {
+	if len(ts.tierList.Pool) == 0 {
+		return
+	}
+	count := len(ts.tierList.Pool)
+	dialog.ShowConfirm(
+		"Удалить все непривязанные картинки?",
+		fmt.Sprintf(
+			"Будет удалено %d картинок из панели.\n"+
+				"Картинки, уже размещённые в тирах, останутся.",
+			count,
+		),
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			for _, it := range ts.tierList.Pool {
+				appstorage.DeleteImage(it.ImagePath)
+			}
+			ts.tierList.Pool = nil
+			ts.rebuildPool()
+			ts.save()
+		}, ts.window,
+	)
+}
+
+func (ts *TierListScreen) setupDropHandler() {
+	ts.window.SetOnDropped(func(pos fyne.Position, uris []fyne.URI) {
+		if len(uris) == 0 {
+			return
+		}
+
+		var imageURIs []fyne.URI
+		for _, u := range uris {
+			ext := strings.ToLower(filepath.Ext(u.Path()))
+			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" { // 👈 добавили .webp
+				imageURIs = append(imageURIs, u)
+			}
+		}
+		if len(imageURIs) == 0 {
+			return
+		}
+
+		fyne.Do(func() {
+			for _, u := range imageURIs {
+				srcPath := u.Path()
+
+				if runtime.GOOS == "windows" {
+					srcPath = strings.TrimPrefix(srcPath, "/")
+					srcPath = filepath.FromSlash(srcPath)
+				}
+
+				id := NewItemID()
+				storedPath, err := appstorage.ImportImage(srcPath, id)
+				if err != nil {
+					log.Printf("не удалось импортировать %s: %v", srcPath, err)
+					continue
+				}
+
+				item := models.TierItem{
+					ID:        id,
+					Label:     filepath.Base(srcPath),
+					ImagePath: storedPath,
+				}
+				ts.tierList.Pool = append(ts.tierList.Pool, item)
+			}
+
+			ts.rebuildPool()
+			ts.save()
+		})
+	})
+}
+
+func (ts *TierListScreen) setupCloseHandler() {
+	ts.window.SetCloseIntercept(func() {
+		// Принудительно завершаем приложение.
+		// Это закроет все окна, включая диалог выбора файла.
+		fyne.CurrentApp().Quit()
+	})
 }
